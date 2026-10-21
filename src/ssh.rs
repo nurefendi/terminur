@@ -15,7 +15,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn connect(host: &Host, on_data: impl Fn(Vec<u8>) + Send + 'static) -> Result<Self> {
+    pub fn connect(host: &Host, mut on_data: impl FnMut(Vec<u8>) + Send + 'static) -> Result<Self> {
         let pty = native_pty_system().openpty(PtySize {
             rows: 30,
             cols: 100,
