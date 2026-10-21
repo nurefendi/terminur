@@ -16,7 +16,7 @@ enum Escape {
     Start,
     Csi,
     Osc,
-    OscEscape,
+    OscTerminator,
 }
 
 impl OutputDecoder {
@@ -49,10 +49,10 @@ impl OutputDecoder {
                     if byte == 0x07 {
                         self.escape = Escape::None;
                     } else if byte == 0x1b {
-                        self.escape = Escape::OscEscape;
+                        self.escape = Escape::OscTerminator;
                     }
                 }
-                Escape::OscEscape => {
+                Escape::OscTerminator => {
                     self.escape = if byte == b'\\' {
                         Escape::None
                     } else {
