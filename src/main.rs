@@ -15,13 +15,13 @@ use std::{
     },
     time::Duration,
 };
-use terminal::OutputDecoder;
+use terminal::TerminalScreen;
 
 struct RustTerm {
     hosts: Vec<Host>,
     active: Option<usize>,
     session: Option<SharedSession>,
-    output: Arc<Mutex<String>>,
+    output: Arc<Mutex<TerminalScreen>>,
     output_dirty: Arc<AtomicBool>,
     connection_generation: u64,
     focus: FocusHandle,
@@ -43,23 +43,11 @@ impl RustTerm {
         self.connection_generation += 1;
         let generation = self.connection_generation;
         self.output_dirty.store(false, Ordering::Release);
-        *self.output.lock().unwrap() =
-            format!("Connecting to {}@{}...\n", host.username, host.hostname);
+        *self.output.lock().unwrap() = TerminalScreen::default();
         let output = self.output.clone();
         let dirty = self.output_dirty.clone();
-        let mut decoder = OutputDecoder::default();
         match Session::connect(&host, move |bytes| {
-            let text = decoder.push(&bytes);
-            let mut out = output.lock().unwrap();
-            out.push_str(&text);
-            if out.len() > 150_000 {
-                let cut = out.len() - 100_000;
-                let boundary = (cut..out.len())
-                    .find(|&i| out.is_char_boundary(i))
-                    .unwrap_or(out.len());
-                out.drain(..boundary);
-            }
-            drop(out);
+            output.lock().unwrap().push(&bytes);
             dirty.store(true, Ordering::Release);
         }) {
             Ok(session) => self.session = Some(Arc::new(Mutex::new(session))),
@@ -99,7 +87,7 @@ impl RustTerm {
 
 impl Render for RustTerm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let output = self.output.lock().unwrap().clone();
+        let output = self.output.lock().unwrap().snapshot();
         let mut sidebar = div()
             .w(px(250.))
             .h_full()
