@@ -799,7 +799,9 @@ impl Render for TermiNur {
                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
                             let lines = match event.delta {
                                 ScrollDelta::Lines(delta) => delta.y,
-                                ScrollDelta::Pixels(delta) => f32::from(delta.y) / terminal_line_height(this.font_size),
+                                ScrollDelta::Pixels(delta) => {
+                                    f32::from(delta.y) / terminal_line_height(this.font_size)
+                                }
                             };
                             this.scroll(lines);
                             cx.notify();
@@ -923,7 +925,6 @@ mod tests {
         assert_eq!(clamp_font_size(FONT_SIZE + 1.), 14.);
         assert_eq!(terminal_line_height(14.), 18.);
     }
-
 
     #[test]
     fn closing_active_tab_selects_neighbor() {
