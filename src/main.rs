@@ -1,10 +1,13 @@
 mod hosts;
 mod ssh;
 
-use gpui::{div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, Focusable, KeyDownEvent, Window, WindowBounds, WindowOptions};
-use std::sync::{Arc, Mutex};
+use gpui::{
+    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, Focusable,
+    KeyDownEvent, Window, WindowBounds, WindowOptions,
+};
 use hosts::Host;
 use ssh::{Session, SharedSession};
+use std::sync::{Arc, Mutex};
 
 struct RustTerm {
     hosts: Vec<Host>,
@@ -15,28 +18,43 @@ struct RustTerm {
 }
 
 impl Focusable for RustTerm {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle { self.focus.clone() }
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl RustTerm {
     fn connect(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(host) = self.hosts.get(index).cloned() else { return; };
+        let Some(host) = self.hosts.get(index).cloned() else {
+            return;
+        };
         self.active = Some(index);
         self.session = None;
-        *self.output.lock().unwrap() = format!("Connecting to {}@{}...\n", host.username, host.hostname);
+        *self.output.lock().unwrap() =
+            format!("Connecting to {}@{}...\n", host.username, host.hostname);
         let output = self.output.clone();
         let entity = cx.entity().downgrade();
         match Session::connect(&host, move |bytes| {
             let text = String::from_utf8_lossy(&bytes).into_owned();
             let mut out = output.lock().unwrap();
             out.push_str(&text);
-            if out.len() > 150_000 { let cut = out.len() - 100_000; let boundary = (cut..out.len()).find(|&i| out.is_char_boundary(i)).unwrap_or(out.len()); out.drain(..boundary); }
+            if out.len() > 150_000 {
+                let cut = out.len() - 100_000;
+                let boundary = (cut..out.len())
+                    .find(|&i| out.is_char_boundary(i))
+                    .unwrap_or(out.len());
+                out.drain(..boundary);
+            }
             drop(out);
             // GPUI redraw from background PTY reader is not yet implemented.
             let _ = &entity;
         }) {
             Ok(session) => self.session = Some(Arc::new(Mutex::new(session))),
-            Err(e) => self.output.lock().unwrap().push_str(&format!("Connection error: {e}\n")),
+            Err(e) => self
+                .output
+                .lock()
+                .unwrap()
+                .push_str(&format!("Connection error: {e}\n")),
         }
         cx.notify();
     }
@@ -45,63 +63,108 @@ impl RustTerm {
 impl Render for RustTerm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let output = self.output.lock().unwrap().clone();
-        let mut sidebar = div().w(px(250.)).h_full().p_4().bg(rgb(0x161b22))
-            .flex().flex_col().gap_3()
+        let mut sidebar = div()
+            .w(px(250.))
+            .h_full()
+            .p_4()
+            .bg(rgb(0x161b22))
+            .flex()
+            .flex_col()
+            .gap_3()
             .child(div().text_xl().child("RustTerm"))
             .child(div().text_sm().text_color(rgb(0x8b949e)).child("HOSTS"));
         for (i, host) in self.hosts.iter().enumerate() {
             let title = format!("{}  ·  {}", host.name, host.hostname);
-            sidebar = sidebar.child(div().id(("host", i)).p_2().rounded_md()
-                .bg(if self.active == Some(i) { rgb(0x303c4a) } else { rgb(0x21262d) })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| this.connect(i, cx)))
-                .child(title));
+            sidebar = sidebar.child(
+                div()
+                    .id(("host", i))
+                    .p_2()
+                    .rounded_md()
+                    .bg(if self.active == Some(i) {
+                        rgb(0x303c4a)
+                    } else {
+                        rgb(0x21262d)
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.connect(i, cx)))
+                    .child(title),
+            );
         }
-        div().size_full().flex().flex_row().bg(rgb(0x0d1117))
+        div()
+            .size_full()
+            .flex()
+            .flex_row()
+            .bg(rgb(0x0d1117))
             .text_color(rgb(0xe6edf3))
             .child(sidebar)
-            .child(div().flex_1().p_4().flex().flex_col().gap_3()
-                .child(div().text_lg().child("Terminal · click here, then type"))
-                .child(div().id("terminal").flex_1().p_3().rounded_md()
-                    .bg(rgb(0x010409)).text_color(rgb(0x5cda89))
-                    .track_focus(&self.focus)
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if let Some(session) = &this.session {
-                            let key = &event.keystroke;
-                            let data: Option<Vec<u8>> = match key.key.as_str() {
-                                "enter" => Some(vec![b'\r']),
-                                "backspace" => Some(vec![0x7f]),
-                                "tab" => Some(vec![b'\t']),
-                                "up" => Some(b"\x1b[A".to_vec()),
-                                "down" => Some(b"\x1b[B".to_vec()),
-                                "left" => Some(b"\x1b[D".to_vec()),
-                                "right" => Some(b"\x1b[C".to_vec()),
-                                _ if key.modifiers.control && key.key.len() == 1 => {
-                                    let b = key.key.as_bytes()[0].to_ascii_lowercase();
-                                    if b.is_ascii_lowercase() { Some(vec![b - b'a' + 1]) } else { None }
+            .child(
+                div()
+                    .flex_1()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(div().text_lg().child("Terminal · click here, then type"))
+                    .child(
+                        div()
+                            .id("terminal")
+                            .flex_1()
+                            .p_3()
+                            .rounded_md()
+                            .bg(rgb(0x010409))
+                            .text_color(rgb(0x5cda89))
+                            .track_focus(&self.focus)
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                if let Some(session) = &this.session {
+                                    let key = &event.keystroke;
+                                    let data: Option<Vec<u8>> = match key.key.as_str() {
+                                        "enter" => Some(vec![b'\r']),
+                                        "backspace" => Some(vec![0x7f]),
+                                        "tab" => Some(vec![b'\t']),
+                                        "up" => Some(b"\x1b[A".to_vec()),
+                                        "down" => Some(b"\x1b[B".to_vec()),
+                                        "left" => Some(b"\x1b[D".to_vec()),
+                                        "right" => Some(b"\x1b[C".to_vec()),
+                                        _ if key.modifiers.control && key.key.len() == 1 => {
+                                            let b = key.key.as_bytes()[0].to_ascii_lowercase();
+                                            if b.is_ascii_lowercase() {
+                                                Some(vec![b - b'a' + 1])
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        _ => key.key_char.as_ref().map(|s| s.as_bytes().to_vec()),
+                                    };
+                                    if let Some(data) = data {
+                                        let _ = session.lock().unwrap().send(&data);
+                                    }
                                 }
-                                _ => key.key_char.as_ref().map(|s| s.as_bytes().to_vec()),
-                            };
-                            if let Some(data) = data { let _ = session.lock().unwrap().send(&data); }
-                        }
-                        cx.notify();
-                    }))
-                    .child(div().text_sm().child(output))))
+                                cx.notify();
+                            }))
+                            .child(div().text_sm().child(output)),
+                    ),
+            )
     }
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.), px(720.)), cx);
-        cx.open_window(WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            ..Default::default()
-        }, |_, cx| {
-            cx.new(|cx| RustTerm {
-                hosts: hosts::load(), active: None, session: None,
-                output: Arc::new(Mutex::new("Select a host to connect.\n".into())),
-                focus: cx.focus_handle(),
-            })
-        }).expect("Unable to open RustTerm window");
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_, cx| {
+                cx.new(|cx| RustTerm {
+                    hosts: hosts::load(),
+                    active: None,
+                    session: None,
+                    output: Arc::new(Mutex::new("Select a host to connect.\n".into())),
+                    focus: cx.focus_handle(),
+                })
+            },
+        )
+        .expect("Unable to open RustTerm window");
     });
 }
