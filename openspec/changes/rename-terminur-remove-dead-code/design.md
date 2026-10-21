@@ -1,0 +1,3 @@
+# Design
+
+Rename the root GPUI entity to TermiNur without changing threading or state ownership. Retain the master as `_master`: it owns a live resource rather than an unused future feature. Remove unused `resize` and `save` methods. Select the configuration path with a pure helper accepting a base directory and test precedence using isolated temporary directories, without changing process environment. Update Cargo, CI upload paths, and README; leave historical change documents intact. Run formatting, checks, tests, Clippy, and release compilation locally. CI status cannot be queried because `gh` is unavailable.

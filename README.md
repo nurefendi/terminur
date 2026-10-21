@@ -1,30 +1,32 @@
 # TermiNur
 
-**An open-source-minded SSH desktop client for macOS, built with Rust and GPUI.**
+**An early-stage SSH client for macOS with an inline terminal, built with Rust and GPUI.**
 
 TermiNur is an early-stage community project exploring a lightweight native-feeling SSH experience. Contributions, testing reports, accessibility feedback, and design discussions are welcome.
 
-> **Status: prototype / MVP 1.2 in development.** The terminal screen implementation is experimental. Do not rely on this app as your only way to administer production systems.
+> **Status: prototype.** The terminal is inline in the TermiNur window. Do not rely on this app as your only way to administer production systems.
 
 ## What works today
 
 - macOS application UI built with **Rust + GPUI** (no Electron, Tauri, Flutter, or SwiftUI).
-- SSH sessions via the system OpenSSH executable and a pseudo-terminal (`portable-pty`).
-- Host definitions loaded from local JSON configuration.
-- Keyboard input for basic typing, Enter, Backspace, Tab, arrow keys, and common Ctrl combinations.
-- MVP 1.2 branch: bounded terminal screen with basic cursor movement, erase controls, streaming UTF-8, and ANSI sequence handling.
+- Inline SSH sessions in tabs: system OpenSSH runs in separate pseudo-terminals and output is rendered inside the TermiNur window. Clicking a host again opens another independent session; close its tab to terminate that session.
+- Terminal emulation via the `vt100` parser: SGR colors, bold/italic/underline, cursor addressing, erase, scroll regions, alternate screen, and scrolling history.
+- Keyboard input including Enter, Backspace, Tab, arrows, Home/End, Page Up/Down, Delete, Escape, Ctrl combinations, Alt prefixes, bracketed paste (Cmd+V), and mouse-wheel scrollback.
+- The pseudo-terminal is resized to the window grid so full-screen programs such as `vim`, `nano`, and `htop` receive the correct size.
+- Add SSH hosts in the app (+ New host) with name, hostname/IP, username, port, and optional SSH private key path; saved to local JSON configuration. Existing hosts can also be configured manually.
+- A compact Hosts workspace inspired by the supplied desktop reference: sidebar, host cards, SSH tabs in the macOS titlebar area and an address-first Create host flow. TermiNur retains its own branding; unfinished sections are marked “Later”. The native window controls are retained.
 - Automated macOS CI: formatting, type checking, unit tests, Clippy, release build, and binary artifact upload.
 
 ## What is not ready yet
 
-This is **not a fully compatible xterm terminal emulator**. ANSI colors and styles, alternate-screen mode, mouse protocols, Unicode character-width handling, paste/IME, automatic PTY resizing, tabs, SFTP, and a graphical host editor are not implemented. Full-screen programs such as `vim`, `nano`, and `htop` may render incorrectly.
+Windows and Linux have not been implemented or tested yet. Android and iOS are later milestones. Host editing/deleting, credentials storage, SFTP, mouse reporting, image protocols, IME composition, and text selection/copy are not implemented. Keychain, Port Forwarding, Snippets, Known Hosts, Logs and SFTP are only **Later** labels, not working screens. The Add host form supports basic keyboard editing and paste, not full IME/selection. Scrollback is view-only; the terminal does not yet expose search or copy of history. Multi-tab SSH and this layout still need manual GUI testing against a real host.
 
-Host-key verification is performed by OpenSSH. Check server fingerprints carefully. TermiNur does not store SSH passwords.
+Host-key verification is performed by OpenSSH. Check server fingerprints carefully. TermiNur does not store SSH passwords or private key contents/passphrases; only the selected key's file path is saved.
 
 ## Requirements
 
 - macOS
-- Xcode Command Line Tools: `xcode-select --install`
+- Full Xcode with Metal Toolchain (required to compile GPUI). Command Line Tools alone may not suffice.
 - Stable Rust toolchain: https://rustup.rs/
 - macOS OpenSSH executable at `/usr/bin/ssh`
 
@@ -33,26 +35,23 @@ Host-key verification is performed by OpenSSH. Check server fingerprints careful
 ```bash
 git clone https://github.com/nurefendi/terminur.git
 cd terminur
-
-# MVP 1.2 is currently in a feature branch / draft PR.
-git fetch origin
 git switch feat/mvp-1-2-terminal-emulator
 
 cargo test
 cargo run
 ```
 
-For the current stable branch, use `git switch main` instead. The app name in Cargo is currently `rustterm`; the project is branded **TermiNur**.
+The Cargo package and binary are named `terminur`; the application is branded **TermiNur**. On the Hosts screen, enter an IP/hostname and click **Continue** (or use **+ New host**), complete the host details and choose **Save host**. Click a saved host card to open an inline SSH session. The sidebar **Hosts** entry or top **Workspace** tab returns to the workspace without closing SSH tabs; select a session tab to resume it. Click the terminal panel to type. Host-key prompts and password prompts appear in the terminal panel.
 
 ## Configure SSH hosts
 
-On macOS, edit:
+The **+ New host** button saves host details here on macOS (you can also edit the file manually):
 
 ```text
-~/Library/Application Support/rustterm/hosts.json
+~/Library/Application Support/terminur/hosts.json
 ```
 
-Create the parent directory if necessary. Example:
+If editing manually, create the parent directory if necessary. Example:
 
 ```json
 [
@@ -65,13 +64,17 @@ Create the parent directory if necessary. Example:
 ]
 ```
 
-Replace the documentation-only address `192.0.2.10` with a server you are authorized to access. Restart the app after changing the file; host editing in the UI is not available yet. If the file is missing or invalid, the app falls back to a localhost entry.
+Replace the documentation-only address `192.0.2.10` with a server you are authorized to access. Hosts added in the app appear immediately; restart the app after changing JSON manually. If the file is missing or invalid, the host list is empty. The app refuses to save over malformed existing JSON; repair that file manually first. An explicitly saved localhost entry remains available.
 
-The exact configuration directory is resolved by Rust's `dirs::config_dir()` on the host system.
+The exact configuration directory is resolved by Rust's `dirs::config_dir()` on the host system. If the new file does not exist, TermiNur still reads `~/Library/Application Support/rustterm/hosts.json` for compatibility. Saving an additional host in that case updates the existing legacy file without moving it. If the new file exists but is invalid, the host list is empty rather than loading the legacy file.
 
-## Help test MVP 1.2
+**Using an SSH key:** In the optional **SSH private key path** field, enter an existing readable key file such as `~/.ssh/id_ed25519` (or an absolute path). This saves only the path under `identity_file` in `hosts.json` and passes the expanded path to system OpenSSH using `-i` and `IdentitiesOnly=yes`. The server must have the matching public key authorized; OpenSSH handles passphrase prompts. Leave the field blank to keep OpenSSH's default `~/.ssh/config` / ssh-agent behavior. Key files are never copied into the app or the host list. A manually edited entry pointing to a missing key will show a connection-start error, not silently fall back to another identity.
 
-Connect to an SSH host, click the terminal panel to focus it, and try:
+If you explicitly connect to `localhost` and see `Connection refused` on port 22, macOS is not accepting SSH there. For a remote server, configure its actual hostname/IP and SSH port instead. To SSH into your own Mac, enable **Remote Login** in macOS System Settings → General → Sharing (only if you intend to run an SSH server). Starting the `ssh` program is not proof that authentication succeeded; check its terminal output and exit status.
+
+## Help test inline SSH
+
+Click a configured host, click the terminal panel to focus it, then run:
 
 ```bash
 whoami
@@ -81,7 +84,7 @@ printf 'abc\033[1;1HZ\n'
 seq 1 50
 ```
 
-Please report whether output, cursor overwrites, keyboard input, and scrolling behave correctly. You can also test `vim`, `nano`, or `htop`, but full-screen compatibility is **not yet expected**.
+Please report whether host verification, authentication, typing, colors, cursor placement, resizing, and full-screen programs behave correctly. `vim`, `nano`, and `htop` are expected to work now, but color fidelity and Unicode cell widths are still approximate.
 
 When reporting an issue, include your macOS version, TermiNur branch/commit, steps to reproduce, expected vs. actual behavior, and sanitized screenshots or logs. **Never include private keys, passwords, tokens, public IP addresses you want kept private, or sensitive terminal output.**
 
@@ -106,9 +109,9 @@ Maintainers review proposals and PRs as time allows; please keep discussion resp
 
 ## Project roadmap
 
-- **MVP 1.2:** stateful terminal screen and baseline regression tests — in draft PR.
-- **Next:** ANSI styling, alternate screen, Unicode cell widths, dynamic PTY resize, and interactive-program compatibility.
-- **Later:** graphical host management, multiple SSH sessions/tabs, packaging, and additional SSH workflows.
+- **Current milestone:** inline terminal SSH on macOS.
+- **Next:** complete host management (edit/delete), credentials, SFTP, and manual validation of tabs and Add host with real SSH hosts.
+- **Later:** Windows/Linux support (validate PTY and platform behavior per OS), text selection/copy, packaging, and mobile platform designs.
 
 See the OpenSpec change documents for implementation scope and acceptance criteria.
 

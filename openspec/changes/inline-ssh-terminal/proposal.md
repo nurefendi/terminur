@@ -1,0 +1,3 @@
+# Restore the inline SSH terminal (desktop first)
+
+The previous change routed host clicks to Terminal.app. The intended product behavior is an inline terminal like Termius. The original hand-written emulator could not render colors or full-screen programs, so this change replaces it with the `vt100` parser and rewires SSH output into the GPUI window. Scope is macOS desktop only; Windows/Linux PTY paths and mobile are excluded and are not claimed as working. Risks: cross-platform PTY differences, GPUI text shaping of wide characters, and untested interactive programs on remote hosts.

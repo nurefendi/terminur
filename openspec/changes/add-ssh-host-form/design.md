@@ -1,0 +1,3 @@
+# Design
+
+`src/host_editor.rs` owns draft values, field navigation, basic text editing, and pure validation tests; it does not handle credentials or PTYs. `src/main.rs` renders a form in place of the terminal pane with a separate GPUI focus handle and routes keystrokes only to that form while it is visible. Add and Cancel do not affect the tab collection. `src/hosts.rs` serializes only validated host data with an atomic same-directory temp-file rename, refusing to replace invalid/unreadable existing JSON and honoring current/legacy path selection. Persist first, then update in-memory hosts. Format/check/test/Clippy/release build on macOS; GUI interaction and real SSH host remain manual verification.

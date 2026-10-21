@@ -1,275 +1,403 @@
-/// A bounded, stateful screen for PTY output.
-///
-/// This MVP supports cursor addressing and erase commands; it is not a complete
-/// xterm emulator (no alternate screen, SGR colors, or wide-character cells).
-pub struct TerminalScreen {
-    cells: Vec<Vec<char>>,
-    row: usize,
-    col: usize,
-    rows: usize,
-    cols: usize,
-    escape: Escape,
-    utf8: Vec<u8>,
+//! Terminal screen backed by the `vt100` parser.
+//!
+//! The parser handles ANSI escape sequences (SGR colors and attributes, cursor
+//! addressing, erase commands, scroll regions, and the alternate screen). This
+//! module only converts the parsed grid into GPUI text runs.
+
+use gpui::{font, px, rgb, Font, FontWeight, Hsla, Pixels, SharedString, TextRun, UnderlineStyle};
+use std::num::NonZeroU16;
+use vt100::Color;
+
+pub const FONT_SIZE: f32 = 13.;
+pub const LINE_HEIGHT: f32 = 17.;
+const SCROLLBACK_ROWS: usize = 10_000;
+
+pub const DEFAULT_FG: u32 = 0xe6edf3;
+pub const DEFAULT_BG: u32 = 0x0d1117;
+
+pub fn terminal_font() -> Font {
+    font("Menlo")
 }
 
-#[derive(Default)]
-enum Escape {
-    #[default]
-    None,
-    Start,
-    Csi(Vec<u8>),
-    Osc,
-    OscEnd,
+pub fn font_size() -> Pixels {
+    px(FONT_SIZE)
 }
 
-impl TerminalScreen {
-    pub fn new(rows: usize, cols: usize) -> Self {
+/// A visible row converted to styled text for GPUI.
+pub struct Row {
+    pub text: SharedString,
+    pub runs: Vec<TextRun>,
+}
+
+pub struct TerminalBuffer {
+    parser: vt100::Parser,
+    rows: u16,
+    cols: u16,
+}
+
+impl TerminalBuffer {
+    pub fn new(rows: u16, cols: u16) -> Self {
         let rows = rows.max(1);
         let cols = cols.max(1);
         Self {
-            cells: vec![vec![' '; cols]; rows],
-            row: 0,
-            col: 0,
+            parser: vt100::Parser::new(non_zero(rows), non_zero(cols), SCROLLBACK_ROWS),
             rows,
             cols,
-            escape: Escape::None,
-            utf8: Vec::new(),
         }
+    }
+
+    /// Returns true when the grid size actually changed.
+    pub fn resize(&mut self, rows: u16, cols: u16) -> bool {
+        let rows = rows.max(1);
+        let cols = cols.max(1);
+        if (rows, cols) == (self.rows, self.cols) {
+            return false;
+        }
+        self.rows = rows;
+        self.cols = cols;
+        self.parser.set_size(non_zero(rows), non_zero(cols));
+        true
     }
 
     pub fn push(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            match &mut self.escape {
-                Escape::None => match byte {
-                    0x1b => {
-                        self.flush_incomplete_utf8();
-                        self.escape = Escape::Start;
-                    }
-                    b'\r' => self.col = 0,
-                    b'\n' => self.line_feed(),
-                    0x08 => self.col = self.col.saturating_sub(1),
-                    b'\t' => {
-                        let next = (self.col / 8 + 1) * 8;
-                        self.col = next.min(self.cols - 1);
-                    }
-                    0x00..=0x1f | 0x7f => {}
-                    _ => self.print_byte(byte),
-                },
-                Escape::Start => {
-                    self.escape = match byte {
-                        b'[' => Escape::Csi(Vec::new()),
-                        b']' => Escape::Osc,
-                        _ => Escape::None,
-                    };
-                }
-                Escape::Csi(buf) => {
-                    if (0x40..=0x7e).contains(&byte) {
-                        let params = std::mem::take(buf);
-                        self.escape = Escape::None;
-                        self.apply_csi(&params, byte);
-                    } else if buf.len() < 64 {
-                        buf.push(byte);
-                    } else {
-                        self.escape = Escape::None;
-                    }
-                }
-                Escape::Osc => {
-                    if byte == 0x07 {
-                        self.escape = Escape::None;
-                    } else if byte == 0x1b {
-                        self.escape = Escape::OscEnd;
-                    }
-                }
-                Escape::OscEnd => {
-                    self.escape = if byte == b'\\' {
-                        Escape::None
-                    } else {
-                        Escape::Osc
-                    };
-                }
-            }
-        }
+        self.parser.process(bytes);
     }
 
-    fn flush_incomplete_utf8(&mut self) {
-        if !self.utf8.is_empty() {
-            self.utf8.clear();
-            self.put('�');
-        }
+    #[cfg(test)]
+    pub fn alternate_screen(&self) -> bool {
+        self.parser.screen().alternate_screen()
     }
 
-    fn print_byte(&mut self, byte: u8) {
-        self.utf8.push(byte);
-        loop {
-            match std::str::from_utf8(&self.utf8) {
-                Ok(s) => {
-                    let chars: Vec<char> = s.chars().collect();
-                    self.utf8.clear();
-                    for ch in chars {
-                        self.put(ch);
-                    }
-                    break;
+    pub fn application_cursor(&self) -> bool {
+        self.parser.screen().application_cursor()
+    }
+
+    pub fn bracketed_paste(&self) -> bool {
+        self.parser.screen().bracketed_paste()
+    }
+
+    pub fn scrollback_len(&self) -> usize {
+        self.parser.screen().scrollback_len()
+    }
+
+    pub fn set_scrollback(&mut self, rows: usize) {
+        self.parser.screen_mut().set_scrollback(rows);
+    }
+
+    /// Converts every visible grid row into a styled text row.
+    pub fn visible_rows(&self) -> Vec<Row> {
+        let screen = self.parser.screen();
+        let cursor = screen.cursor_position();
+        let show_cursor = !screen.hide_cursor() && screen.scrollback() == 0;
+        let (rows, cols) = (self.rows, self.cols);
+        let mut out = Vec::with_capacity(rows as usize);
+        for row in 0..rows {
+            let mut text = String::new();
+            let mut runs: Vec<TextRun> = Vec::new();
+            let mut pending: Option<CellStyle> = None;
+            let mut pending_len = 0usize;
+            for col in 0..cols {
+                let Some(cell) = screen.cell(row, col) else {
+                    continue;
+                };
+                if cell.is_wide_continuation() {
+                    continue;
                 }
-                Err(err) => {
-                    let valid = err.valid_up_to();
-                    if valid > 0 {
-                        let chars: Vec<char> = String::from_utf8_lossy(&self.utf8[..valid])
-                            .chars()
-                            .collect();
-                        self.utf8.drain(..valid);
-                        for ch in chars {
-                            self.put(ch);
-                        }
+                let piece = match cell.contents() {
+                    "" => " ",
+                    contents => contents,
+                };
+                let mut style = CellStyle::new(cell);
+                if show_cursor && cursor == (row, col) {
+                    style.invert();
+                }
+                text.push_str(piece);
+                match &mut pending {
+                    Some(current) if current.same_as(&style) => pending_len += piece.len(),
+                    Some(current) => {
+                        runs.push(current.into_run(pending_len));
+                        pending_len = piece.len();
+                        *current = style;
                     }
-                    if let Some(len) = err.error_len() {
-                        self.utf8.drain(..len);
-                        self.put('�');
-                    } else {
-                        break;
+                    None => {
+                        pending = Some(style);
+                        pending_len = piece.len();
                     }
                 }
             }
-        }
-    }
-
-    fn put(&mut self, ch: char) {
-        if self.col >= self.cols {
-            self.col = 0;
-            self.line_feed();
-        }
-        self.cells[self.row][self.col] = ch;
-        self.col += 1;
-    }
-
-    fn line_feed(&mut self) {
-        if self.row + 1 == self.rows {
-            self.cells.rotate_left(1);
-            self.cells[self.rows - 1].fill(' ');
-        } else {
-            self.row += 1;
-        }
-    }
-
-    fn apply_csi(&mut self, raw: &[u8], command: u8) {
-        let text = String::from_utf8_lossy(raw);
-        if text.starts_with('?') {
-            return;
-        }
-        let args: Vec<usize> = text
-            .split(';')
-            .take(8)
-            .map(|part| part.parse::<usize>().unwrap_or(0).min(10_000))
-            .collect();
-        let first = args.first().copied().unwrap_or(0);
-        let count = first.max(1);
-        match command {
-            b'A' => self.row = self.row.saturating_sub(count),
-            b'B' => self.row = self.row.saturating_add(count).min(self.rows - 1),
-            b'C' => self.col = self.col.saturating_add(count).min(self.cols - 1),
-            b'D' => self.col = self.col.saturating_sub(count),
-            b'G' => self.col = count.saturating_sub(1).min(self.cols - 1),
-            b'H' | b'f' => {
-                self.row = count.saturating_sub(1).min(self.rows - 1);
-                self.col = args
-                    .get(1)
-                    .copied()
-                    .unwrap_or(1)
-                    .max(1)
-                    .saturating_sub(1)
-                    .min(self.cols - 1);
+            if let Some(style) = pending {
+                runs.push(style.into_run(pending_len));
             }
-            b'J' => match first {
-                2 | 3 => {
-                    for row in &mut self.cells {
-                        row.fill(' ');
-                    }
-                }
-                0 => {
-                    self.cells[self.row][self.col.min(self.cols - 1)..].fill(' ');
-                    for row in &mut self.cells[self.row + 1..] {
-                        row.fill(' ');
-                    }
-                }
-                1 => {
-                    for row in &mut self.cells[..self.row] {
-                        row.fill(' ');
-                    }
-                    self.cells[self.row][..=self.col.min(self.cols - 1)].fill(' ');
-                }
-                _ => {}
-            },
-            b'K' => match first {
-                0 => self.cells[self.row][self.col.min(self.cols - 1)..].fill(' '),
-                1 => self.cells[self.row][..=self.col.min(self.cols - 1)].fill(' '),
-                2 => self.cells[self.row].fill(' '),
-                _ => {}
-            },
-            _ => {}
+            out.push(Row {
+                text: text.into(),
+                runs,
+            });
         }
+        out
     }
 
-    pub fn snapshot(&self) -> String {
-        self.cells
-            .iter()
-            .map(|row| row.iter().collect::<String>().trim_end().to_owned())
-            .collect::<Vec<_>>()
-            .join("\n")
+    /// Plain text of a single visible row; used by tests and diagnostics.
+    #[cfg(test)]
+    pub fn row_text(&self, row: u16) -> String {
+        let screen = self.parser.screen();
+        let mut text = String::new();
+        for col in 0..self.cols {
+            if let Some(cell) = screen.cell(row, col) {
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                text.push_str(cell.contents());
+            }
+        }
+        text.trim_end().to_string()
     }
 }
 
-impl Default for TerminalScreen {
-    fn default() -> Self {
-        Self::new(30, 100)
+fn non_zero(value: u16) -> NonZeroU16 {
+    NonZeroU16::new(value).expect("terminal grid dimensions are clamped to at least one")
+}
+
+#[derive(Clone, Copy)]
+struct CellStyle {
+    fg: Hsla,
+    bg: Hsla,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl CellStyle {
+    fn new(cell: &vt100::Cell) -> Self {
+        let mut style = Self {
+            fg: foreground(cell.fgcolor()),
+            bg: background(cell.bgcolor()),
+            bold: cell.bold(),
+            italic: cell.italic(),
+            underline: cell.underline(),
+        };
+        if cell.inverse() {
+            style.invert();
+        }
+        style
+    }
+
+    fn invert(&mut self) {
+        std::mem::swap(&mut self.fg, &mut self.bg);
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        self.fg == other.fg
+            && self.bg == other.bg
+            && self.bold == other.bold
+            && self.italic == other.italic
+            && self.underline == other.underline
+    }
+
+    fn into_run(self, len: usize) -> TextRun {
+        let mut font = terminal_font();
+        if self.bold {
+            font.weight = FontWeight::BOLD;
+        }
+        if self.italic {
+            font.style = gpui::FontStyle::Italic;
+        }
+        TextRun {
+            len,
+            font,
+            color: self.fg,
+            background_color: (self.bg != default_background()).then_some(self.bg),
+            underline: self.underline.then_some(UnderlineStyle {
+                thickness: px(1.),
+                color: Some(self.fg),
+                wavy: false,
+            }),
+            strikethrough: None,
+        }
+    }
+}
+
+fn default_foreground() -> Hsla {
+    rgb(DEFAULT_FG).into()
+}
+
+fn default_background() -> Hsla {
+    rgb(DEFAULT_BG).into()
+}
+
+fn foreground(color: Color) -> Hsla {
+    match color {
+        Color::Default => default_foreground(),
+        Color::Idx(index) => indexed(index),
+        Color::Rgb(r, g, b) => rgb(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)).into(),
+    }
+}
+
+fn background(color: Color) -> Hsla {
+    match color {
+        Color::Default => default_background(),
+        Color::Idx(index) => indexed(index),
+        Color::Rgb(r, g, b) => rgb(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)).into(),
+    }
+}
+
+/// Standard 256-color xterm palette.
+fn indexed(index: u8) -> Hsla {
+    const BASE: [u32; 16] = [
+        0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5, 0x7f7f7f,
+        0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff,
+    ];
+    let hex = if index < 16 {
+        BASE[usize::from(index)]
+    } else if index < 232 {
+        let cube = u32::from(index) - 16;
+        let channel = |value: u32| if value == 0 { 0 } else { 55 + value * 40 };
+        let r = channel(cube / 36);
+        let g = channel(cube % 36 / 6);
+        let b = channel(cube % 6);
+        r << 16 | g << 8 | b
+    } else {
+        let level = 8 + (u32::from(index) - 232) * 10;
+        level << 16 | level << 8 | level
+    };
+    rgb(hex).into()
+}
+
+/// Encodes a keystroke as terminal input bytes.
+pub fn encode_key(
+    key: &str,
+    characters: Option<&str>,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    application_cursor: bool,
+) -> Option<Vec<u8>> {
+    let arrows = |suffix: &str| {
+        let prefix = if application_cursor { "\x1bO" } else { "\x1b[" };
+        Some(format!("{prefix}{suffix}").into_bytes())
+    };
+    match key {
+        "enter" => Some(vec![b'\r']),
+        "backspace" => Some(vec![0x7f]),
+        "tab" if shift => Some(b"\x1b[Z".to_vec()),
+        "tab" => Some(vec![b'\t']),
+        "escape" => Some(vec![0x1b]),
+        "up" => arrows("A"),
+        "down" => arrows("B"),
+        "right" => arrows("C"),
+        "left" => arrows("D"),
+        "home" => arrows("H"),
+        "end" => arrows("F"),
+        "insert" => Some(b"\x1b[2~".to_vec()),
+        "delete" => Some(b"\x1b[3~".to_vec()),
+        "pageup" => Some(b"\x1b[5~".to_vec()),
+        "pagedown" => Some(b"\x1b[6~".to_vec()),
+        "space" if ctrl => Some(vec![0x00]),
+        _ if ctrl && key.len() == 1 => {
+            let byte = key.as_bytes()[0].to_ascii_lowercase();
+            byte.is_ascii_lowercase().then(|| vec![byte - b'a' + 1])
+        }
+        _ => {
+            let characters = characters?;
+            let mut bytes = Vec::with_capacity(characters.len() + 1);
+            if alt {
+                bytes.push(0x1b);
+            }
+            bytes.extend_from_slice(characters.as_bytes());
+            Some(bytes)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TerminalScreen;
+    use super::*;
+
+    fn buffer() -> TerminalBuffer {
+        TerminalBuffer::new(4, 10)
+    }
 
     #[test]
     fn carriage_return_overwrites() {
-        let mut t = TerminalScreen::new(2, 10);
+        let mut t = buffer();
         t.push(b"hello\rworld");
-        assert_eq!(t.snapshot().lines().next(), Some("world"));
+        assert_eq!(t.row_text(0), "world");
     }
 
     #[test]
     fn cursor_addressing_and_erase() {
-        let mut t = TerminalScreen::new(2, 10);
+        let mut t = buffer();
         t.push(b"abc\x1b[1;1HZ");
-        assert_eq!(t.snapshot().lines().next(), Some("Zbc"));
+        assert_eq!(t.row_text(0), "Zbc");
         t.push(b"\x1b[2K");
-        assert_eq!(t.snapshot().lines().next(), Some(""));
-    }
-
-    #[test]
-    fn split_csi() {
-        let mut t = TerminalScreen::new(2, 10);
-        t.push(b"abcd\x1b[2");
-        t.push(b"DZ");
-        assert_eq!(t.snapshot().lines().next(), Some("abZd"));
+        assert_eq!(t.row_text(0), "");
     }
 
     #[test]
     fn split_utf8() {
-        let mut t = TerminalScreen::new(2, 10);
+        let mut t = buffer();
         t.push(&[0xe2, 0x82]);
         t.push(&[0xac]);
-        assert_eq!(t.snapshot().lines().next(), Some("€"));
+        assert_eq!(t.row_text(0), "€");
     }
 
     #[test]
     fn scrolls_with_bounded_rows() {
-        let mut t = TerminalScreen::new(2, 5);
+        let mut t = TerminalBuffer::new(2, 5);
         t.push(b"one\r\ntwo\r\nthree");
-        assert_eq!(t.snapshot(), "two\nthree");
+        assert_eq!(t.row_text(0), "two");
+        assert_eq!(t.row_text(1), "three");
     }
 
     #[test]
     fn strips_osc() {
-        let mut t = TerminalScreen::new(2, 10);
+        let mut t = buffer();
         t.push(b"a\x1b]0;title\x07b");
-        assert_eq!(t.snapshot().lines().next(), Some("ab"));
+        assert_eq!(t.row_text(0), "ab");
+    }
+
+    #[test]
+    fn renders_colors_and_attributes() {
+        let mut t = buffer();
+        t.push(b"\x1b[1;31mred\x1b[0m plain");
+        let rows = t.visible_rows();
+        let first = rows.first().expect("row");
+        assert_eq!(first.text.trim_end(), "red plain");
+        // The cursor cell is inverted, so it becomes a separate trailing run.
+        assert!(first.runs.len() >= 2);
+        assert_eq!(first.runs[0].len, 3);
+        assert_eq!(first.runs[0].color, indexed(1));
+        assert_eq!(first.runs[0].font.weight, FontWeight::BOLD);
+        assert_eq!(first.runs[1].color, default_foreground());
+    }
+
+    #[test]
+    fn alternate_screen_switches_content() {
+        let mut t = buffer();
+        t.push(b"normal");
+        t.push(b"\x1b[?1049h\x1b[Halt");
+        assert!(t.alternate_screen());
+        assert_eq!(t.row_text(0), "alt");
+        t.push(b"\x1b[?1049l");
+        assert!(!t.alternate_screen());
+        assert_eq!(t.row_text(0), "normal");
+    }
+
+    #[test]
+    fn run_lengths_match_text_bytes() {
+        let mut t = buffer();
+        t.push("\x1b[1;31mbold\x1b[0m plain \x1b[4;44mund[0m €".as_bytes());
+        for row in t.visible_rows() {
+            let total: usize = row.runs.iter().map(|run| run.len).sum();
+            assert_eq!(total, row.text.len());
+            assert!(row.text.is_char_boundary(total));
+        }
+    }
+
+    #[test]
+    fn resize_keeps_grid_consistent() {
+        let mut t = buffer();
+        assert!(t.resize(6, 20));
+        assert!(!t.resize(6, 20));
+        assert_eq!(t.visible_rows().len(), 6);
     }
 }

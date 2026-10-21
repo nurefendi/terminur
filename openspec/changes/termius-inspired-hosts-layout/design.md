@@ -1,0 +1,3 @@
+# Design
+
+`src/main.rs` owns a lightweight Address/Details editor stage in addition to its existing tabs. It renders a top workspace strip, sidebar, and a right workspace whose content is one of address step, details step, hosts grid or terminal. All input is routed through the existing `HostDraft` and separate editor focus handle. `src/host_editor.rs` extracts hostname validation and address-stage advancement so errors can be tested without GPUI; saving still delegates to `hosts::save` and SSH to `Session`. Keep a fixed-width sidebar, resize all PTYs to the new terminal workspace dimensions, and use plain Unicode/text rather than copied icons. Automated checks plus manual visual and SSH-tab testing are required; latest published CI is on a previous commit.
