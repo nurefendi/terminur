@@ -74,12 +74,12 @@ impl RustTerm {
             // PTY callbacks run on a native thread. Notify GPUI only from its
             // own async executor, and stop the task when this session changes.
             cx.spawn(
-                move |this: gpui::WeakEntity<RustTerm>, mut cx: AsyncApp| async move {
+                move |this: gpui::WeakEntity<RustTerm>, cx: &mut AsyncApp| async move {
                     loop {
                         cx.background_executor()
                             .timer(Duration::from_millis(33))
                             .await;
-                        let keep_running = this.update(&mut cx, |this, cx| {
+                        let keep_running = this.update(cx, |this, cx| {
                             if this.connection_generation != generation {
                                 return false;
                             }
