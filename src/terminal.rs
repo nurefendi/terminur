@@ -4,7 +4,7 @@
 //! addressing, erase commands, scroll regions, and the alternate screen). This
 //! module only converts the parsed grid into GPUI text runs.
 
-use gpui::{font, rgb, Font, FontWeight, Hsla, SharedString, TextRun, UnderlineStyle};
+use gpui::{font, px, rgb, Font, FontWeight, Hsla, SharedString, TextRun, UnderlineStyle};
 use std::num::NonZeroU16;
 use vt100::Color;
 
