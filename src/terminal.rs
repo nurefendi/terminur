@@ -113,8 +113,9 @@ impl TerminalScreen {
                 Err(err) => {
                     let valid = err.valid_up_to();
                     if valid > 0 {
-                        let chars: Vec<char> =
-                            String::from_utf8_lossy(&self.utf8[..valid]).chars().collect();
+                        let chars: Vec<char> = String::from_utf8_lossy(&self.utf8[..valid])
+                            .chars()
+                            .collect();
                         self.utf8.drain(..valid);
                         for ch in chars {
                             self.put(ch);
@@ -169,7 +170,13 @@ impl TerminalScreen {
             b'G' => self.col = count.saturating_sub(1).min(self.cols - 1),
             b'H' | b'f' => {
                 self.row = count.saturating_sub(1).min(self.rows - 1);
-                self.col = args.get(1).copied().unwrap_or(1).max(1).saturating_sub(1).min(self.cols - 1);
+                self.col = args
+                    .get(1)
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1)
+                    .saturating_sub(1)
+                    .min(self.cols - 1);
             }
             b'J' => match first {
                 2 | 3 => {
