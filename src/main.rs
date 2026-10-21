@@ -185,7 +185,7 @@ fn main() {
                     hosts: hosts::load(),
                     active: None,
                     session: None,
-                    output: Arc::new(Mutex::new("Select a host to connect.\n".into())),
+                    output: Arc::new(Mutex::new(TerminalScreen::default())),
                     output_dirty: Arc::new(AtomicBool::new(false)),
                     connection_generation: 0,
                     focus: cx.focus_handle(),
