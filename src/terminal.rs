@@ -4,7 +4,7 @@
 //! addressing, erase commands, scroll regions, and the alternate screen). This
 //! module only converts the parsed grid into GPUI text runs.
 
-use gpui::{font, px, rgb, Font, FontWeight, Hsla, Pixels, SharedString, TextRun, UnderlineStyle};
+use gpui::{font, rgb, Font, FontWeight, Hsla, SharedString, TextRun, UnderlineStyle};
 use std::num::NonZeroU16;
 use vt100::Color;
 
@@ -17,10 +17,6 @@ pub const DEFAULT_BG: u32 = 0x0d1117;
 
 pub fn terminal_font() -> Font {
     font("Menlo")
-}
-
-pub fn font_size() -> Pixels {
-    px(FONT_SIZE)
 }
 
 /// A visible row converted to styled text for GPUI.
