@@ -8,7 +8,13 @@ use gpui::{
 };
 use hosts::Host;
 use ssh::{Session, SharedSession};
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 use terminal::OutputDecoder;
 
 struct RustTerm {
@@ -16,6 +22,8 @@ struct RustTerm {
     active: Option<usize>,
     session: Option<SharedSession>,
     output: Arc<Mutex<String>>,
+    output_dirty: Arc<AtomicBool>,
+    connection_generation: u64,
     focus: FocusHandle,
 }
 
@@ -32,9 +40,13 @@ impl RustTerm {
         };
         self.active = Some(index);
         self.session = None;
+        self.connection_generation += 1;
+        let generation = self.connection_generation;
+        self.output_dirty.store(false, Ordering::Release);
         *self.output.lock().unwrap() =
             format!("Connecting to {}@{}...\n", host.username, host.hostname);
         let output = self.output.clone();
+        let dirty = self.output_dirty.clone();
         let mut decoder = OutputDecoder::default();
         match Session::connect(&host, move |bytes| {
             let text = decoder.push(&bytes);
@@ -48,7 +60,7 @@ impl RustTerm {
                 out.drain(..boundary);
             }
             drop(out);
-            // GPUI redraw from background PTY reader is not yet implemented.
+            dirty.store(true, Ordering::Release);
         }) {
             Ok(session) => self.session = Some(Arc::new(Mutex::new(session))),
             Err(e) => self
@@ -58,6 +70,30 @@ impl RustTerm {
                 .push_str(&format!("Connection error: {e}\n")),
         }
         cx.notify();
+        if self.session.is_some() {
+            // PTY callbacks run on a native thread. Notify GPUI only from its
+            // own async executor, and stop the task when this session changes.
+            cx.spawn(move |this, mut cx| async move {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(33))
+                        .await;
+                    let keep_running = this.update(&mut cx, |this, cx| {
+                        if this.connection_generation != generation {
+                            return false;
+                        }
+                        if this.output_dirty.swap(false, Ordering::AcqRel) {
+                            cx.notify();
+                        }
+                        true
+                    });
+                    if !matches!(keep_running, Ok(true)) {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
     }
 }
 
@@ -162,6 +198,8 @@ fn main() {
                     active: None,
                     session: None,
                     output: Arc::new(Mutex::new("Select a host to connect.\n".into())),
+                    output_dirty: Arc::new(AtomicBool::new(false)),
+                    connection_generation: 0,
                     focus: cx.focus_handle(),
                 })
             },
