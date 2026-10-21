@@ -1,5 +1,6 @@
 mod hosts;
 mod ssh;
+mod terminal;
 
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, Focusable,
@@ -8,6 +9,7 @@ use gpui::{
 use hosts::Host;
 use ssh::{Session, SharedSession};
 use std::sync::{Arc, Mutex};
+use terminal::OutputDecoder;
 
 struct RustTerm {
     hosts: Vec<Host>,
@@ -33,9 +35,9 @@ impl RustTerm {
         *self.output.lock().unwrap() =
             format!("Connecting to {}@{}...\n", host.username, host.hostname);
         let output = self.output.clone();
-        let entity = cx.entity().downgrade();
+        let mut decoder = OutputDecoder::default();
         match Session::connect(&host, move |bytes| {
-            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let text = decoder.push(&bytes);
             let mut out = output.lock().unwrap();
             out.push_str(&text);
             if out.len() > 150_000 {
@@ -47,7 +49,6 @@ impl RustTerm {
             }
             drop(out);
             // GPUI redraw from background PTY reader is not yet implemented.
-            let _ = &entity;
         }) {
             Ok(session) => self.session = Some(Arc::new(Mutex::new(session))),
             Err(e) => self
