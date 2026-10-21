@@ -26,7 +26,17 @@ const PANEL_PADDING: f32 = 16.;
 const TERMINAL_PADDING: f32 = 12.;
 const GAP: f32 = 12.;
 const HEADER_HEIGHT: f32 = 46.;
-const HINT_HEIGHT: f32 = 18.;
+const HINT_HEIGHT: f32 = 32.;
+const MIN_TERMINAL_FONT: f32 = 10.;
+const MAX_TERMINAL_FONT: f32 = 24.;
+
+fn clamp_font_size(size: f32) -> f32 {
+    size.clamp(MIN_TERMINAL_FONT, MAX_TERMINAL_FONT)
+}
+
+fn terminal_line_height(size: f32) -> f32 {
+    size + (LINE_HEIGHT - FONT_SIZE)
+}
 const STATUS_HEIGHT: f32 = 36.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +55,7 @@ struct TermiNur {
     editor: Option<HostDraft>,
     editor_stage: EditorStage,
     grid: (u16, u16),
+    font_size: f32,
 }
 
 struct Tab {
@@ -271,6 +282,18 @@ impl TermiNur {
         }
     }
 
+    fn zoom_terminal(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.font_size = clamp_font_size(self.font_size + delta);
+        self.fit_grid(window, cx);
+        cx.notify();
+    }
+
+    fn reset_terminal_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.font_size = FONT_SIZE;
+        self.fit_grid(window, cx);
+        cx.notify();
+    }
+
     fn paste(&mut self, text: &str) {
         let Some(tab) = self.active_tab() else {
             return;
@@ -314,7 +337,7 @@ impl TermiNur {
             .text_system()
             .ch_advance(
                 cx.text_system().resolve_font(&terminal::terminal_font()),
-                terminal::font_size(),
+                px(self.font_size),
             )
             .map(f32::from)
             .unwrap_or(8.);
@@ -332,7 +355,9 @@ impl TermiNur {
             - TERMINAL_PADDING * 2.
             - 4.;
         let cols = (usable_width / cell_width).floor().clamp(20., 400.) as u16;
-        let rows = (usable_height / LINE_HEIGHT).floor().clamp(4., 200.) as u16;
+        let rows = (usable_height / terminal_line_height(self.font_size))
+            .floor()
+            .clamp(4., 200.) as u16;
         if (rows, cols) == self.grid {
             return;
         }
@@ -349,6 +374,8 @@ impl TermiNur {
 impl Render for TermiNur {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_grid(window, cx);
+        let line_height = terminal_line_height(self.font_size);
+        let font_size = self.font_size;
         let rows = self
             .active_tab()
             .map(|tab| tab.screen.lock().unwrap().visible_rows())
@@ -378,7 +405,7 @@ impl Render for TermiNur {
             .w(px(SIDEBAR_WIDTH))
             .h_full()
             .p(px(8.))
-            .bg(rgb(0x292b3e))
+            .bg(rgb(0x202738))
             .flex()
             .flex_col()
             .gap(px(6.))
@@ -387,7 +414,7 @@ impl Render for TermiNur {
                     .id("hosts-navigation")
                     .p_2()
                     .rounded_md()
-                    .bg(rgb(0x41445d))
+                    .bg(rgb(0x33445e))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| this.show_hosts(cx)))
                     .child("▦   Hosts"),
@@ -540,7 +567,7 @@ impl Render for TermiNur {
             } else {
                 StyledText::new(row.text).with_runs(row.runs)
             };
-            terminal_lines = terminal_lines.child(div().h(px(LINE_HEIGHT)).child(line));
+            terminal_lines = terminal_lines.child(div().h(px(line_height)).child(line));
         }
 
         let mut tab_strip = div()
@@ -665,9 +692,62 @@ impl Render for TermiNur {
                 .child(
                     div()
                         .h(px(HINT_HEIGHT))
-                        .text_sm()
-                        .text_color(rgb(0x989bb1))
-                        .child("Click terminal to type · Scroll to view history"),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(0x9caac0))
+                                .child("TERMINAL  /  Click to type · Scroll for history"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .id("terminal-font-decrease")
+                                        .px(px(10.))
+                                        .py(px(5.))
+                                        .rounded_md()
+                                        .bg(rgb(0x303a50))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.zoom_terminal(-1., window, cx)
+                                        }))
+                                        .child("A−"),
+                                )
+                                .child(
+                                    div()
+                                        .id("terminal-font-reset")
+                                        .px(px(10.))
+                                        .py(px(5.))
+                                        .rounded_md()
+                                        .bg(rgb(0x303a50))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.reset_terminal_zoom(window, cx)
+                                        }))
+                                        .child(format!("{font_size:.0} px")),
+                                )
+                                .child(
+                                    div()
+                                        .id("terminal-font-increase")
+                                        .px(px(10.))
+                                        .py(px(5.))
+                                        .rounded_md()
+                                        .bg(rgb(0x303a50))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.zoom_terminal(1., window, cx)
+                                        }))
+                                        .child("A+"),
+                                ),
+                        ),
                 )
                 .child(
                     div()
@@ -677,8 +757,8 @@ impl Render for TermiNur {
                         .rounded_md()
                         .bg(rgb(DEFAULT_BG))
                         .font(terminal::terminal_font())
-                        .text_size(px(FONT_SIZE))
-                        .line_height(px(LINE_HEIGHT))
+                        .text_size(px(font_size))
+                        .line_height(px(line_height))
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .track_focus(&self.focus)
@@ -719,7 +799,7 @@ impl Render for TermiNur {
                         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
                             let lines = match event.delta {
                                 ScrollDelta::Lines(delta) => delta.y,
-                                ScrollDelta::Pixels(delta) => f32::from(delta.y) / LINE_HEIGHT,
+                                ScrollDelta::Pixels(delta) => f32::from(delta.y) / terminal_line_height(this.font_size),
                             };
                             this.scroll(lines);
                             cx.notify();
@@ -731,7 +811,7 @@ impl Render for TermiNur {
                         .h(px(STATUS_HEIGHT))
                         .p_2()
                         .rounded_md()
-                        .bg(rgb(0x292b3e))
+                        .bg(rgb(0x202d40))
                         .text_sm()
                         .text_color(rgb(0x989bb1))
                         .child(
@@ -749,7 +829,7 @@ impl Render for TermiNur {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x1e2030))
+            .bg(rgb(0x151c2b))
             .text_color(rgb(DEFAULT_FG))
             .child(
                 div()
@@ -758,7 +838,7 @@ impl Render for TermiNur {
                     .flex()
                     .flex_row()
                     .gap(px(8.))
-                    .bg(rgb(0x25283b))
+                    .bg(rgb(0x1c2638))
                     // GPUI draws into the transparent macOS titlebar. Keep
                     // this region free for the native traffic light buttons.
                     .child(div().w(px(104.)).flex_shrink_0())
@@ -769,7 +849,7 @@ impl Render for TermiNur {
                             .flex_shrink_0()
                             .p_2()
                             .rounded_md()
-                            .bg(rgb(0x41445d))
+                            .bg(rgb(0x355b88))
                             .cursor_pointer()
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.open_editor(window, cx)),
@@ -820,6 +900,7 @@ fn main() {
                     editor,
                     editor_stage: EditorStage::Address,
                     grid: (30, 100),
+                    font_size: FONT_SIZE,
                 });
                 if view.read(cx).editor.is_some() {
                     window.focus(&view.read(cx).editor_focus);
@@ -833,7 +914,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::active_after_close;
+    use super::{active_after_close, clamp_font_size, terminal_line_height, FONT_SIZE};
+
+    #[test]
+    fn font_zoom_is_bounded_and_line_height_tracks_font() {
+        assert_eq!(clamp_font_size(9.), 10.);
+        assert_eq!(clamp_font_size(25.), 24.);
+        assert_eq!(clamp_font_size(FONT_SIZE + 1.), 14.);
+        assert_eq!(terminal_line_height(14.), 18.);
+    }
+
 
     #[test]
     fn closing_active_tab_selects_neighbor() {
