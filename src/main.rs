@@ -3,8 +3,8 @@ mod ssh;
 mod terminal;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, Focusable,
-    AsyncApp, KeyDownEvent, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, AsyncApp, Bounds, Context, FocusHandle,
+    Focusable, KeyDownEvent, Window, WindowBounds, WindowOptions,
 };
 use hosts::Host;
 use ssh::{Session, SharedSession};
