@@ -8,6 +8,7 @@ use std::{
 };
 
 pub struct Session {
+    #[expect(dead_code, reason = "Kept for PTY resizing support")]
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -57,6 +58,7 @@ impl Session {
         Ok(())
     }
 
+    #[expect(dead_code, reason = "Terminal resizing UI is not wired up yet")]
     pub fn resize(&self, rows: u16, cols: u16) -> Result<()> {
         self.master.resize(PtySize {
             rows,
