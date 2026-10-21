@@ -31,6 +31,7 @@ pub fn load() -> Vec<Host> {
         })
 }
 
+#[expect(dead_code, reason = "Used by the upcoming GPUI host editor")]
 pub fn save(hosts: &[Host]) -> Result<()> {
     let file = path();
     if let Some(parent) = file.parent() {
