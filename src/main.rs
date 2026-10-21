@@ -22,9 +22,9 @@ use std::{
 use terminal::{TerminalBuffer, DEFAULT_BG, DEFAULT_FG, FONT_SIZE, LINE_HEIGHT};
 
 const SIDEBAR_WIDTH: f32 = 212.;
-const PANEL_PADDING: f32 = 16.;
-const TERMINAL_PADDING: f32 = 12.;
-const GAP: f32 = 12.;
+const PANEL_PADDING: f32 = 8.;
+const TERMINAL_PADDING: f32 = 4.;
+const GAP: f32 = 6.;
 const HEADER_HEIGHT: f32 = 46.;
 const HINT_HEIGHT: f32 = 32.;
 const MIN_TERMINAL_FONT: f32 = 10.;
@@ -56,6 +56,7 @@ struct TermiNur {
     editor_stage: EditorStage,
     grid: (u16, u16),
     font_size: f32,
+    sidebar_visible: bool,
 }
 
 struct Tab {
@@ -282,6 +283,12 @@ impl TermiNur {
         }
     }
 
+    fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_visible = !self.sidebar_visible;
+        self.fit_grid(window, cx);
+        cx.notify();
+    }
+
     fn zoom_terminal(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
         self.font_size = clamp_font_size(self.font_size + delta);
         self.fit_grid(window, cx);
@@ -342,7 +349,7 @@ impl TermiNur {
             .map(f32::from)
             .unwrap_or(8.);
         let usable_width = f32::from(viewport.width)
-            - SIDEBAR_WIDTH
+            - if self.sidebar_visible { SIDEBAR_WIDTH } else { 0. }
             - PANEL_PADDING * 2.
             - TERMINAL_PADDING * 2.
             - 4.;
@@ -685,7 +692,9 @@ impl Render for TermiNur {
         } else if self.active_tab().is_some() {
             div()
                 .size_full()
-                .p(px(PANEL_PADDING))
+                .px(px(PANEL_PADDING))
+                .pt(px(4.))
+                .pb(px(4.))
                 .flex()
                 .flex_col()
                 .gap(px(GAP))
@@ -844,6 +853,18 @@ impl Render for TermiNur {
                     // GPUI draws into the transparent macOS titlebar. Keep
                     // this region free for the native traffic light buttons.
                     .child(div().w(px(104.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .id("toggle-sidebar")
+                            .p_2()
+                            .rounded_md()
+                            .bg(rgb(0x303a50))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_sidebar(window, cx)
+                            }))
+                            .child(if self.sidebar_visible { "☰ Hide menu" } else { "☰ Show menu" }),
+                    )
                     .child(tab_strip)
                     .child(
                         div()
@@ -864,7 +885,7 @@ impl Render for TermiNur {
                     .flex_1()
                     .flex()
                     .flex_row()
-                    .child(sidebar)
+                    .children(self.sidebar_visible.then_some(sidebar))
                     .child(div().flex_1().child(content)),
             )
     }
@@ -903,6 +924,7 @@ fn main() {
                     editor_stage: EditorStage::Address,
                     grid: (30, 100),
                     font_size: FONT_SIZE,
+                    sidebar_visible: true,
                 });
                 if view.read(cx).editor.is_some() {
                     window.focus(&view.read(cx).editor_focus);
