@@ -55,7 +55,7 @@ impl RustTerm {
                 .output
                 .lock()
                 .unwrap()
-                .push_str(&format!("Connection error: {e}\n")),
+                .push(format!("Connection error: {e}\n").as_bytes()),
         }
         cx.notify();
         if self.session.is_some() {
