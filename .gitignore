@@ -1,0 +1,9 @@
+/target/
+.DS_Store
+.env
+.env.*
+!.env.example
+**/id_rsa
+**/id_ed25519
+**/*.pem
+hosts.json
