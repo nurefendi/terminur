@@ -4,7 +4,7 @@ mod terminal;
 
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, Focusable,
-    KeyDownEvent, Window, WindowBounds, WindowOptions,
+    AsyncApp, KeyDownEvent, Window, WindowBounds, WindowOptions,
 };
 use hosts::Host;
 use ssh::{Session, SharedSession};
@@ -73,7 +73,7 @@ impl RustTerm {
         if self.session.is_some() {
             // PTY callbacks run on a native thread. Notify GPUI only from its
             // own async executor, and stop the task when this session changes.
-            cx.spawn(move |this, mut cx| async move {
+            cx.spawn(move |this, mut cx: AsyncApp| async move {
                 loop {
                     cx.background_executor()
                         .timer(Duration::from_millis(33))
