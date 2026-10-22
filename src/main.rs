@@ -349,7 +349,11 @@ impl TermiNur {
             .map(f32::from)
             .unwrap_or(8.);
         let usable_width = f32::from(viewport.width)
-            - if self.sidebar_visible { SIDEBAR_WIDTH } else { 0. }
+            - if self.sidebar_visible {
+                SIDEBAR_WIDTH
+            } else {
+                0.
+            }
             - PANEL_PADDING * 2.
             - TERMINAL_PADDING * 2.
             - 4.;
@@ -860,10 +864,14 @@ impl Render for TermiNur {
                             .rounded_md()
                             .bg(rgb(0x303a50))
                             .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_sidebar(window, cx)
-                            }))
-                            .child(if self.sidebar_visible { "☰ Hide menu" } else { "☰ Show menu" }),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)),
+                            )
+                            .child(if self.sidebar_visible {
+                                "☰ Hide menu"
+                            } else {
+                                "☰ Show menu"
+                            }),
                     )
                     .child(tab_strip)
                     .child(
