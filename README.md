@@ -6,6 +6,20 @@ TermiNur is an early-stage community project exploring a lightweight native-feel
 
 > **Status: prototype.** The terminal is inline in the TermiNur window. Do not rely on this app as your only way to administer production systems.
 
+## Platform support
+
+TermiNur's product direction is an independently implemented cross-platform SSH client. The current macOS prototype is the starting point, not a finished cross-platform product or a claim of completed feature parity with Termius.
+
+| Platform | Current status |
+| --- | --- |
+| macOS | Existing Rust + GPUI prototype. Not production-ready or fully GUI-tested; manual GUI and real-host SSH validation are still needed. |
+| Windows | Planned desktop target; not implemented or verified. |
+| Linux | Planned desktop target; not implemented or verified. |
+| Android | Planned mobile target; not implemented or verified. |
+| iOS | Planned mobile target; not implemented or verified. |
+
+Builds and tests require the appropriate toolchains and runners for each target platform. The current CI workflow targets macOS only; a successful macOS build does not establish Windows, Linux, Android, or iOS support. The requirements and quick-start instructions below apply to the macOS prototype.
+
 ## What works today
 
 - macOS application UI built with **Rust + GPUI** (no Electron, Tauri, Flutter, or SwiftUI).
