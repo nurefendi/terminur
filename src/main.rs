@@ -54,6 +54,8 @@ struct TermiNur {
     editor_focus: FocusHandle,
     editor: Option<HostDraft>,
     editor_stage: EditorStage,
+    editing_host: Option<usize>,
+    delete_pending: bool,
     grid: (u16, u16),
     font_size: f32,
     sidebar_visible: bool,
@@ -90,9 +92,51 @@ impl TermiNur {
         let mut draft = HostDraft::default();
         draft.select(1);
         self.editor = Some(draft);
+        self.editing_host = None;
+        self.delete_pending = false;
         self.editor_stage = EditorStage::Address;
         self.active = None;
         window.focus(&self.editor_focus);
+        cx.notify();
+    }
+
+    fn edit_host(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(host) = self.hosts.get(index) else {
+            return;
+        };
+        self.editor = Some(HostDraft::from_host(host));
+        self.editing_host = Some(index);
+        self.delete_pending = false;
+        self.editor_stage = EditorStage::Details;
+        self.active = None;
+        window.focus(&self.editor_focus);
+        cx.notify();
+    }
+
+    fn delete_host(&mut self, cx: &mut Context<Self>) {
+        if !self.delete_pending {
+            return;
+        }
+        let Some(index) = self.editing_host else {
+            return;
+        };
+        let result = hosts::replace_or_remove(&self.hosts, index, None).and_then(|updated| {
+            hosts::save(&updated)?;
+            Ok(updated)
+        });
+        match result {
+            Ok(updated) => {
+                self.hosts = updated;
+                self.editor = None;
+                self.editing_host = None;
+                self.delete_pending = false;
+            }
+            Err(error) => {
+                if let Some(editor) = &mut self.editor {
+                    editor.error = Some(format!("Could not delete host: {error}"));
+                }
+            }
+        }
         cx.notify();
     }
 
@@ -113,6 +157,14 @@ impl TermiNur {
 
     fn editor_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke;
+        if self.delete_pending {
+            if key.key == "escape" {
+                self.delete_pending = false;
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if key.key == "escape" {
             self.editor = None;
         } else if key.key == "enter" {
@@ -163,8 +215,20 @@ impl TermiNur {
                 return;
             }
         };
-        let mut updated = self.hosts.clone();
-        updated.push(host);
+        let updated = if let Some(index) = self.editing_host {
+            match hosts::replace_or_remove(&self.hosts, index, Some(host)) {
+                Ok(updated) => updated,
+                Err(error) => {
+                    editor.error = Some(error.to_string());
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            let mut updated = self.hosts.clone();
+            updated.push(host);
+            updated
+        };
         match hosts::save(&updated) {
             Ok(()) => {
                 self.hosts = updated;
@@ -438,6 +502,35 @@ impl Render for TermiNur {
             .child(planned_section("Logs"));
 
         let form = self.editor.as_ref().map(|editor| {
+            if self.delete_pending {
+                return div()
+                    .id("confirm-delete-host")
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(12.))
+                    .track_focus(&self.editor_focus)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        this.editor_key(event, cx)
+                    }))
+                    .child("Delete saved host?")
+                    .child("This removes the saved connection only. Open sessions stay running.")
+                    .child(div().text_sm().text_color(rgb(0xff918a))
+                        .child(editor.error.clone().unwrap_or_default()))
+                    .child(div().id("confirm-delete").p_2().rounded_md()
+                        .bg(rgb(0x702f38)).cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.delete_host(cx)))
+                        .child("Delete permanently"))
+                    .child(div().id("cancel-delete").p_2().cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.delete_pending = false;
+                            cx.notify();
+                        }))
+                        .child("Keep host"))
+                    .into_any_element();
+            }
             if self.editor_stage == EditorStage::Address {
                 return div()
                     .id("host-address-form")
@@ -547,7 +640,11 @@ impl Render for TermiNur {
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                     this.editor_key(event, cx)
                 }))
-                .child(div().text_lg().child("Host details"))
+                .child(div().text_lg().child(if self.editing_host.is_some() {
+                    "Edit host"
+                } else {
+                    "Host details"
+                }))
                 .child(div().text_sm().text_color(rgb(0x8b949e)).child("Key path optional: ~/.ssh/id_ed25519 or an absolute path. Only the path is saved; no key bytes or passphrase."))
                 .child(fields.w(px(480.)))
                 .child(
@@ -560,6 +657,19 @@ impl Render for TermiNur {
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| this.save_host(cx)))
                             .child("Save host"))
+                        .when(self.editing_host.is_some(), |row| {
+                            row.child(div().id("delete-host").p_2().rounded_md()
+                                .bg(rgb(0x702f38)).cursor_pointer()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.delete_pending = true;
+                                    if let Some(editor) = &mut this.editor {
+                                        editor.error = None;
+                                    }
+                                    window.focus(&this.editor_focus);
+                                    cx.notify();
+                                }))
+                                .child("Delete host"))
+                        })
                         .child(div().id("cancel-host").p_2().rounded_md().bg(rgb(0x21262d))
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -669,21 +779,40 @@ impl Render for TermiNur {
         } else {
             host_cards = host_cards.child(div().text_lg().child("Saved hosts"));
             for (index, host) in self.hosts.iter().enumerate() {
-                host_cards =
-                    host_cards.child(
-                        div()
-                            .id(("host-card", index))
-                            .p(px(16.))
-                            .rounded_md()
-                            .bg(rgb(0x292b3e))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| this.connect(index, cx)))
-                            .child(format!("▦  {}", host.name))
-                            .child(div().text_sm().text_color(rgb(0x989bb1)).child(format!(
-                                "{}@{}:{}",
-                                host.username, host.hostname, host.port
-                            ))),
-                    );
+                host_cards = host_cards.child(
+                    div()
+                        .id(("host-card", index))
+                        .p(px(16.))
+                        .rounded_md()
+                        .bg(rgb(0x292b3e))
+                        .flex()
+                        .flex_row()
+                        .gap(px(12.))
+                        .child(
+                            div()
+                                .id(("connect-host", index))
+                                .flex_1()
+                                .cursor_pointer()
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.connect(index, cx)),
+                                )
+                                .child(format!("▦  {}", host.name))
+                                .child(div().text_sm().text_color(rgb(0x989bb1)).child(format!(
+                                    "{}@{}:{}",
+                                    host.username, host.hostname, host.port
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .id(("edit-host", index))
+                                .p_2()
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.edit_host(index, window, cx)
+                                }))
+                                .child("Edit"),
+                        ),
+                );
             }
         }
 
@@ -930,6 +1059,8 @@ fn main() {
                     editor_focus: cx.focus_handle(),
                     editor,
                     editor_stage: EditorStage::Address,
+                    editing_host: None,
+                    delete_pending: false,
                     grid: (30, 100),
                     font_size: FONT_SIZE,
                     sidebar_visible: true,
