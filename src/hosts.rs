@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     pub name: String,
     pub hostname: String,
@@ -74,6 +74,21 @@ pub fn save(hosts: &[Host]) -> Result<()> {
     save_to(&base, hosts)
 }
 
+pub fn replace_or_remove(
+    hosts: &[Host],
+    index: usize,
+    replacement: Option<Host>,
+) -> Result<Vec<Host>> {
+    anyhow::ensure!(index < hosts.len(), "Host no longer exists");
+    let mut updated = hosts.to_vec();
+    if let Some(host) = replacement {
+        updated[index] = host;
+    } else {
+        updated.remove(index);
+    }
+    Ok(updated)
+}
+
 fn save_to(base: &Path, hosts: &[Host]) -> Result<()> {
     let path = config_path(base);
     if path.exists() {
@@ -106,6 +121,49 @@ fn save_to(base: &Path, hosts: &[Host]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_and_delete_roundtrip_without_mutating_original() {
+        let base = std::env::temp_dir().join(format!(
+            "terminur-edit-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let original = vec![Host {
+            name: "Original".into(),
+            hostname: "example.com".into(),
+            username: "me".into(),
+            port: 22,
+            identity_file: None,
+        }];
+        save_to(&base, &original).unwrap();
+        let mut edited = original[0].clone();
+        edited.name = "Edited".into();
+        edited.port = 2222;
+        let updated = replace_or_remove(&original, 0, Some(edited.clone())).unwrap();
+        assert_eq!(original[0].name, "Original");
+        assert_eq!(updated, vec![edited]);
+        save_to(&base, &updated).unwrap();
+        assert_eq!(load_from(&base), updated);
+        assert!(replace_or_remove(&updated, 1, None).is_err());
+        let deleted = replace_or_remove(&updated, 0, None).unwrap();
+        assert!(deleted.is_empty());
+        assert_eq!(updated.len(), 1);
+        fs::write(config_path(&base), "invalid json").unwrap();
+        assert!(save_to(&base, &deleted).is_err());
+        assert_eq!(updated[0].name, "Edited");
+        assert_eq!(
+            fs::read_to_string(config_path(&base)).unwrap(),
+            "invalid json"
+        );
+        fs::write(config_path(&base), serde_json::to_vec(&updated).unwrap()).unwrap();
+        save_to(&base, &deleted).unwrap();
+        assert!(load_from(&base).is_empty());
+        fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn config_path_prefers_current_and_preserves_legacy() {
