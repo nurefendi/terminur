@@ -33,6 +33,21 @@ impl Default for HostDraft {
 }
 
 impl HostDraft {
+    pub fn from_host(host: &Host) -> Self {
+        let mut draft = Self {
+            values: [
+                host.name.clone(),
+                host.hostname.clone(),
+                host.username.clone(),
+                host.port.to_string(),
+                host.identity_file.clone().unwrap_or_default(),
+            ],
+            ..Self::default()
+        };
+        draft.select(0);
+        draft
+    }
+
     pub fn continue_from_address(&mut self) -> Result<(), String> {
         let hostname = self.values[1].trim();
         if let Err(error) = validate_hostname(hostname) {
@@ -158,6 +173,29 @@ fn validate_hostname(hostname: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_prefills_all_fields_and_keeps_original_independent() {
+        let host = Host {
+            name: "Café".into(),
+            hostname: "example.com".into(),
+            username: "operator".into(),
+            port: 2222,
+            identity_file: None,
+        };
+        let mut draft = HostDraft::from_host(&host);
+        assert_eq!(draft.validate().unwrap(), host);
+        assert_eq!(draft.cursor, host.name.len());
+        draft.insert(" new");
+        assert_eq!(host.name, "Café");
+        assert_eq!(draft.validate().unwrap().name, "Café new");
+        let mut keyed = host.clone();
+        keyed.identity_file = Some("/path/not/read/on/prefill".into());
+        assert_eq!(
+            HostDraft::from_host(&keyed).values[4],
+            "/path/not/read/on/prefill"
+        );
+    }
 
     #[test]
     fn valid_host_and_bad_values() {
