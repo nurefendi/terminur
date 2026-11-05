@@ -30,7 +30,21 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Type check
-        run: cargo check --locked --all-targets
+        shell: bash
+        run: |
+          cargo check --locked --all-targets > "$RUNNER_TEMP/type-check.log" 2>&1 && result=0 || result=$?
+          cat "$RUNNER_TEMP/type-check.log"
+          if [ "$result" -ne 0 ]; then
+            python3 - <<'PY'
+          import os
+          from pathlib import Path
+          lines = Path(os.environ["RUNNER_TEMP"], "type-check.log").read_text(errors="replace").splitlines()
+          for line in lines[-40:]:
+              message = line.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=Linux type check::{message}")
+          PY
+          fi
+          exit "$result"
       - name: Unit tests
         run: cargo test --locked --all-targets
       - name: Clippy
